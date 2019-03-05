@@ -58,6 +58,7 @@ function run_with_retries() {
 ROLE="$(/usr/share/google/get_metadata_value attributes/dataproc-role)"
 USER_NAME="$(/usr/share/google/get_metadata_value attributes/rstudio-user || echo rstudio)"
 USER_PASSWORD="$(/usr/share/google/get_metadata_value attributes/rstudio-password || true)"
+NO_AUTH="$(/usr/share/google/get_metadata_value attributes/rstudio-no-auth || true)"
 RSTUDIO_VERSION=1.1.463
 OS_ID=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
 OS_CODE=$(lsb_release -cs)
@@ -68,17 +69,19 @@ function get_apt_key_for_debian() {
 }
 
 if [[ "${ROLE}" == 'Master' ]]; then
-  if (( ${#USER_PASSWORD} < 7 )) ; then
-    echo "You must specify a password of at least 7 characters for user \`$USER_NAME\` through metadata \`rstudio-password\`."
-    exit 1
-  fi
   if [[ -z "${USER_NAME}" ]] ; then
     echo "RStudio user name must not be empty."
     exit 2
   fi
-  if [[ "${USER_NAME}" == "${USER_PASSWORD}" ]] ; then
-    echo "RStudio user name and password must not be the same."
-    exit 3
+  if [[ -z "${NO_AUTH}" ]] ; then
+    if (( ${#USER_PASSWORD} < 7 )) ; then
+      echo "You must specify a password of at least 7 characters for user \`$USER_NAME\` through metadata \`rstudio-password\`."
+      exit 1
+    fi
+    if [[ "${USER_NAME}" == "${USER_PASSWORD}" ]] ; then
+      echo "RStudio user name and password must not be the same."
+      exit 3
+    fi
   fi
   # Install RStudio Server
   update_apt_get
@@ -103,6 +106,13 @@ if [[ "${ROLE}" == 'Master' ]]; then
   fi
   if ! [ $(id -u "${USER_NAME}") ]; then
     useradd --create-home --gid "${USER_NAME}" "${USER_NAME}"
-    echo "${USER_NAME}:${USER_PASSWORD}" | chpasswd
+    if [[ -z "${NO_AUTH}" ]] ; then
+      echo "${USER_NAME}:${USER_PASSWORD}" | chpasswd
+    fi
+  fi
+  if [[ ! -z "${NO_AUTH}" ]] ; then
+    sed -i 's:ExecStart=\(.*\):Environment=USER=rstudio\nExecStart=\1 --auth-none 1:1' /etc/systemd/system/rstudio-server.service
+    systemctl daemon-reload
+    systemctl restart rstudio-server
   fi
 fi
